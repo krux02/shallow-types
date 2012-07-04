@@ -56,14 +56,16 @@ sealed trait Triangle {
 }
 */
 
+
 trait Shallow[T] {
 	def stride:Int
 	def copy:T
 }
 
-class ColorAsRef(val buffer:ByteBuffer, val offset:Int) extends Shallow[ColorAsRef] {
+class Color(val buffer:ByteBuffer, val offset:Int) extends Shallow[Color] {
 	def this(a:Byte, r:Byte, g:Byte, b:Byte) = {
-		this(ByteBuffer.allocate(4).put(a).put(r).put(g).put(b).rewind.asInstanceOf[ByteBuffer],0)
+		this(ByteBuffer.allocate(4),0)
+		buffer.put(a).put(r).put(g).put(b).rewind
 	}
 	
 	require(buffer.position == 0, "buffer position not 0")
@@ -85,15 +87,16 @@ class ColorAsRef(val buffer:ByteBuffer, val offset:Int) extends Shallow[ColorAsR
 		bufferThere.position(offset).limit(offset+4)
 		bufferHere put bufferThere
 		bufferHere.rewind
-		new ColorAsRef(bufferHere,0)
+		new Color(bufferHere,0)
 	}
 	
 	override def toString = "Color(%d, %d, %d, %d)".format(a,r,g,b)
 }
 
-class PositionAsRef(val buffer:ByteBuffer, val offset:Int) extends Shallow[PositionAsRef] {
+class Position(val buffer:ByteBuffer, val offset:Int) extends Shallow[Position] {
 	def this(x:Float,y:Float,z:Float) = {
-		this(ByteBuffer.allocate(12).putFloat(x).putFloat(y).putFloat(z).rewind.asInstanceOf[ByteBuffer],0)
+		this(ByteBuffer.allocate(12),0)
+		buffer.putFloat(x).putFloat(y).putFloat(z).rewind
 	}
 	
 	require(buffer.position == 0, "buffer position not 0")
@@ -107,14 +110,14 @@ class PositionAsRef(val buffer:ByteBuffer, val offset:Int) extends Shallow[Posit
 	def y_=(_y:Float) { buffer.putFloat(offset+4,_y) }
 	def z_=(_z:Float) { buffer.putFloat(offset+8,_z) }
 	
-	def +=(that:PositionAsRef) = {
+	def +=(that:Position) = {
 		x += that.x
 		y += that.y
 		z += that.z
 		this
 	}
 	
-	def +(that:PositionAsRef) = copy += that
+	def +(that:Position) = copy += that
 	
 	def copy = {
 		val bufferHere = ByteBuffer.allocate(12)
@@ -122,25 +125,32 @@ class PositionAsRef(val buffer:ByteBuffer, val offset:Int) extends Shallow[Posit
 		bufferThere.position(offset).limit(offset+12)
 		bufferHere put bufferThere
 		bufferHere.rewind
-		new PositionAsRef(bufferHere,0)
+		new Position(bufferHere,0)
 	}
 	
 	override def toString = "Position(%2.2f, %2.2f, %2.2f)".format(x,y,z)
 }
 
-class VertexAsRef(val buffer:ByteBuffer, val offset:Int) extends Shallow[VertexAsRef] {
-	def this(pos:PositionAsRef, col:ColorAsRef) = {
-		this(ByteBuffer.allocate(16).put(pos.buffer).put(col.buffer).rewind.asInstanceOf[ByteBuffer],0)
+class Vertex(val buffer:ByteBuffer, val offset:Int) extends Shallow[Vertex] {
+	def this(pos:Position, col:Color) = {
+		this(ByteBuffer.allocate(16),0)
+		val posBuffer = pos.buffer.duplicate
+		posBuffer.position(pos.offset)
+		posBuffer.limit(pos.offset+12)
+		val colBuffer = col.buffer.duplicate
+		colBuffer.position(pos.offset)
+		colBuffer.limit(pos.offset+4)
+		buffer.put(posBuffer).put(colBuffer).rewind
 	}
 	
 	require(buffer.position == 0, "buffer position not 0")
 	
-	def pos   = new PositionAsRef(buffer, offset   )
-	def col   = new ColorAsRef   (buffer, offset+12)
+	def pos   = new Position(buffer, offset   )
+	def col   = new Color   (buffer, offset+12)
 	def stride     = 16
 	lazy val index = offset/stride
 	
-	def pos_=(_pos:PositionAsRef) {
+	def pos_=(_pos:Position) {
 		val bufferHere  = buffer.duplicate
 		val bufferThere = _pos.buffer.duplicate
 		
@@ -151,7 +161,7 @@ class VertexAsRef(val buffer:ByteBuffer, val offset:Int) extends Shallow[VertexA
 		bufferHere put bufferThere
 	}
 	
-	def col_=(_col:ColorAsRef) {
+	def col_=(_col:Color) {
 		val bufferHere  = buffer.duplicate
 		val bufferThere = _col.buffer.duplicate
 		
@@ -168,25 +178,25 @@ class VertexAsRef(val buffer:ByteBuffer, val offset:Int) extends Shallow[VertexA
 		bufferThere.position(offset).limit(offset+16)
 		bufferHere put bufferThere
 		bufferHere.rewind
-		new VertexAsRef(bufferHere,0)
+		new Vertex(bufferHere,0)
 	}
 	
 	override def toString = "Vertex(%s, %s)".format(pos, col)
 }
 
-class TriangleAsRef(var v1:VertexAsRef,var v2:VertexAsRef,var v3:VertexAsRef) {
+class Triangle(var v1:Vertex,var v2:Vertex,var v3:Vertex) {
 	require( (v1.buffer eq v2.buffer) && (v2.buffer eq v3.buffer) )
 }
 
-class VertexBuffer(val buffer:ByteBuffer) extends IndexedSeq[VertexAsRef] {
+class VertexBuffer(val buffer:ByteBuffer) extends IndexedSeq[Vertex] {
 	def this(length:Int, direct:Boolean = true) = 
 	    this( if(direct) ByteBuffer.allocateDirect(length*16) else ByteBuffer.allocate(length*16) )
 
-	def apply(idx: Int) = new VertexAsRef(buffer,idx*16)
+	def apply(idx: Int) = new Vertex(buffer,idx*16)
 	
 	def length = buffer.capacity / 16
 	
-	def update(idx: Int, elem: VertexAsRef) {
+	def update(idx: Int, elem: Vertex) {
 		val bufferHere  = buffer.duplicate
 		val bufferThere = elem.buffer.duplicate
 		
@@ -202,17 +212,17 @@ class VertexBuffer(val buffer:ByteBuffer) extends IndexedSeq[VertexAsRef] {
 	}
 }
 
-class TriangleMesh(val vertexIndices:IntBuffer, vertices:VertexBuffer) extends IndexedSeq[TriangleAsRef] {
+class TriangleMesh(val vertexIndices:IntBuffer, vertices:VertexBuffer) extends IndexedSeq[Triangle] {
 	def apply(idx: Int) = {
 		val v1 = vertices(vertexIndices.get(idx*3  ))
 		val v2 = vertices(vertexIndices.get(idx*3+1))
 		val v3 = vertices(vertexIndices.get(idx*3+2))
-		new TriangleAsRef(v1,v2,v3)
+		new Triangle(v1,v2,v3)
 	}
 	
 	def length: Int     = vertexIndices.capacity / 3
 	
-	def update(idx: Int, elem: TriangleAsRef) {
+	def update(idx: Int, elem: Triangle) {
 		require(idx < length,"index out of bounds " + idx + " " + length)
 		require(vertices.buffer eq elem.v1.buffer, "Triangles need to be from the same Buffer")
 		
@@ -225,7 +235,3 @@ class TriangleMesh(val vertexIndices:IntBuffer, vertices:VertexBuffer) extends I
 		vertexIndices.put(idx*3+2, index3)
 	}
 }
-
-
-
-
